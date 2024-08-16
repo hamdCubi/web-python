@@ -1,0 +1,12 @@
+requests
+beautifulsoup4
+urllib3
+fastapi
+pydantic
+pandas
+scikit-learn
+nltk
+selenium
+webdriver-manager
+uvicorn
+gunicorn

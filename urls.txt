@@ -1,0 +1,6 @@
+http://127.0.0.1:8000/similar_content/extracted_content.csv/Difference between Title Deed and Oqood
+http://127.0.0.1:8000/unique_content/uscv1/uscv2
+http://127.0.0.1:8000/extract_blog_links/https://www.bayut.com/mybayut/
+http://127.0.0.1:8000/extract_blog_links/https://www.propertyfinder.ae/blog/all-posts/
+http://127.0.0.1:8000/generate_csv/scraped_links.txt
+http://127.0.0.1:8000/
