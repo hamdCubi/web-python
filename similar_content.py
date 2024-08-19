@@ -4,8 +4,9 @@ from sklearn.metrics.pairwise import cosine_similarity
 import nltk
 from nltk.corpus import stopwords
 import string
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 import re
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from azure.storage.blob import BlobServiceClient
 from dotenv import load_dotenv
 import os

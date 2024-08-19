@@ -1,14 +1,16 @@
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import unquote
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from datetime import datetime
 import os
-from azure.storage.blob import BlobServiceClient, BlobClient
+from azure.storage.blob import BlobServiceClient
 from dotenv import load_dotenv
+
 app = FastAPI()
 load_dotenv()
+
 class Progress(BaseModel):
     current_page: int
     links_extracted: int
@@ -88,7 +90,7 @@ def extract_links_propertyfinder(url):
     return links, next_page_url
 
 # Main function to scrape links from all pages
-def scrape_all_pages(starting_url):
+def scrape_all_pages(starting_url, base_url):
     if not starting_url:
         print("URL not found")
         return None
@@ -140,10 +142,24 @@ def scrape_all_pages(starting_url):
     # Upload the file content to the Azure container
     upload_file_to_container("savelinks", file_name, file_content)
 
-    return file_name
+    # Send a webhook notification to the Node.js server
+    webhook_url = "https://nodejs-server-brgrfqfra5bcf5ff.eastus-01.azurewebsites.net/api/webhook/getextractLink"
+    payload = {
+        "message": "Successfully saved links.",
+        "respon": {
+            "fileName": file_name,
+            "site_link": base_url
+        }
+    }
+    try:
+        response = requests.post(webhook_url, json=payload)
+        response.raise_for_status()
+        print("Webhook notification sent successfully.")
+    except requests.RequestException as e:
+        print(f"Error sending webhook notification: {e}")
 
 @app.get("/{encoded_url:path}")
-async def read_root(encoded_url: str):
+async def start_scraping(encoded_url: str, background_tasks: BackgroundTasks):
     print(encoded_url, "this is base url +++++++++++++==")
     UpdURL = "https://"+encoded_url
     base_url = unquote(UpdURL)
@@ -151,18 +167,11 @@ async def read_root(encoded_url: str):
         raise HTTPException(status_code=404, detail="URL not found")
 
     print(base_url, "this is base url encoded +++++++++++++==")
-    # Call the main function to scrape and store links
-    file_path = scrape_all_pages(base_url)
-    if file_path is None:
-        raise HTTPException(status_code=500, detail="Error in scraping links.")
+    
+    # Start the scraping process in the background
+    background_tasks.add_task(scrape_all_pages, base_url, base_url)
 
-    return {
-        "message": "Successfully saved links.",
-        "respon": {
-            "fileName": file_path,
-            "site_link": base_url
-        }
-    }
+    return {"status": "Task started", "message": "Scraping process has started."}
 
 @app.get("/progress")
 async def get_progress():
