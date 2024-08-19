@@ -138,7 +138,7 @@ def scrape_all_pages(starting_url):
         page_count += 1
 
     # Upload the file content to the Azure container
-    upload_file_to_container("linkfiles", file_name, file_content)
+    upload_file_to_container("savelinks", file_name, file_content)
 
     return file_name
 

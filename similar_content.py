@@ -5,9 +5,19 @@ import nltk
 from nltk.corpus import stopwords
 import string
 import re
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from azure.storage.blob import BlobServiceClient
+from dotenv import load_dotenv
+import os
+import io
 
+load_dotenv()
 app = FastAPI()
+
+# Azure Storage connection string
+connect_str = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
+blob_service_client = BlobServiceClient.from_connection_string(connect_str)
+savecsv_container = "savecsv"
 
 # Download NLTK stopwords
 print("Downloading NLTK stopwords...")
@@ -26,17 +36,25 @@ def preprocess_text(text):
     tokens = [word for word in tokens if word not in stop_words]  # Remove stopwords
     return ' '.join(tokens)
 
+# Function to download a file from Azure Blob Storage
+def download_file_from_container(container_name, file_name):
+    try:
+        blob_client = blob_service_client.get_blob_client(container=container_name, blob=file_name)
+        download_stream = blob_client.download_blob()
+        return download_stream.content_as_text()
+    except Exception as ex:
+        print(f"Exception: {ex}")
+        raise HTTPException(status_code=500, detail="Failed to download file from Azure Storage.")
+
 @app.get("/{file1}/{input_topic}")
 async def read_root(file1: str, input_topic: str):
+    # Download the CSV file from Azure Storage
+    print("Downloading extracted content CSV file from Azure Storage...")
+    csv_content_1 = download_file_from_container(savecsv_container, file1)
     
-    # Load the extracted content CSV file
-    print("Loading extracted content CSV file...")
-    df_extracted = pd.read_csv(f"BlogsData/{file1}")
+    # Convert the downloaded content to a DataFrame using StringIO
+    df_extracted = pd.read_csv(io.StringIO(csv_content_1))
     print("Extracted content CSV file loaded successfully.")
-
-    # Print the first few rows to verify the contents
-    print("First few rows of Extracted_content:")
-    print(df_extracted.head())
 
     # Preprocess the texts in 'Title' and 'Meta Description' columns of Extracted_content
     print("Preprocessing text columns in Extracted_content...")

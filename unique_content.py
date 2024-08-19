@@ -10,8 +10,11 @@ from fastapi import FastAPI, HTTPException
 from datetime import datetime
 from azure.storage.blob import BlobServiceClient
 from dotenv import load_dotenv
+import io
+
 app = FastAPI()
 load_dotenv()
+
 # Download NLTK stopwords
 nltk.download('stopwords')
 stop_words = set(stopwords.words('english'))
@@ -59,8 +62,8 @@ async def reat_root(file1: str, file2: str):
     csv_content_2 = download_file_from_container("savecsv", file2)
 
     # Convert the downloaded content to DataFrames
-    df1 = pd.read_csv(pd.compat.StringIO(csv_content_1))
-    df2 = pd.read_csv(pd.compat.StringIO(csv_content_2))
+    df1 = pd.read_csv(io.StringIO(csv_content_1))
+    df2 = pd.read_csv(io.StringIO(csv_content_2))
     print("CSV files loaded successfully.")
 
     # Preprocess the texts in 'Title' and 'Meta Description' columns
@@ -116,7 +119,3 @@ async def reat_root(file1: str, file2: str):
         "CSV_FileName": output_csv_path,
         "JSON_FileName": output_json_path
     }
-
-@app.get("/progress")
-async def get_progress():
-    return progress

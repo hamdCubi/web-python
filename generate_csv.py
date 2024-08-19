@@ -9,8 +9,11 @@ from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
 from azure.storage.blob import BlobServiceClient
 from dotenv import load_dotenv
+import io
+
 app = FastAPI()
 load_dotenv()
+
 # Azure Storage connection string
 connect_str = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
 blob_service_client = BlobServiceClient.from_connection_string(connect_str)
@@ -120,7 +123,7 @@ def download_file_from_container(container_name, blob_name):
     try:
         print("download start......")
         download_stream = blob_client.download_blob()
-        print(download_stream)
+
         print("download complete......")
       
         return download_stream.content_as_text()
@@ -164,14 +167,14 @@ async def read_root(file: str):
             print(f"Error processing {url}: {e}")
 
     # Create the CSV content
-    csv_content = ""
-    with open(csv_file_name, mode='w', newline='', encoding='utf-8') as csv_file:
-        fieldnames = ["Title", "Publish Date", "Meta Description", "Canonical Link", "Article Content", "Yoast Schema Graph"]
-        writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(all_data)
-        csv_file.seek(0)
-        csv_content = csv_file.read()
+    csv_file = io.StringIO()
+    fieldnames = ["Title", "Publish Date", "Meta Description", "Canonical Link", "Article Content", "Yoast Schema Graph"]
+    writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
+    writer.writeheader()
+    writer.writerows(all_data)
+    
+    # Get the CSV content as a string
+    csv_content = csv_file.getvalue()
 
     # Upload the CSV content to Azure Storage
     upload_file_to_container(savecsv_container, csv_file_name, csv_content)
