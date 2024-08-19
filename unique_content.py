@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
@@ -5,15 +6,19 @@ import nltk
 from nltk.corpus import stopwords
 import string
 import re
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from datetime import datetime
-import os
-
+from azure.storage.blob import BlobServiceClient
+from dotenv import load_dotenv
 app = FastAPI()
-
+load_dotenv()
 # Download NLTK stopwords
 nltk.download('stopwords')
 stop_words = set(stopwords.words('english'))
+
+# Azure Storage connection string
+connect_str = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
+blob_service_client = BlobServiceClient.from_connection_string(connect_str)
 
 # Function for text preprocessing
 def preprocess_text(text):
@@ -26,24 +31,37 @@ def preprocess_text(text):
     tokens = [word for word in tokens if word not in stop_words]  # Remove stopwords
     return ' '.join(tokens)
 
+# Function to upload a file to Azure Blob Storage
+def upload_file_to_container(container_name, file_name, file_content):
+    try:
+        blob_client = blob_service_client.get_blob_client(container=container_name, blob=file_name)
+        blob_client.upload_blob(file_content, overwrite=True)
+        print(f"Uploaded {file_name} to {container_name} container.")
+    except Exception as ex:
+        print(f"Exception: {ex}")
+        raise HTTPException(status_code=500, detail="Failed to upload file to Azure Storage.")
+
+# Function to download a file from Azure Blob Storage
+def download_file_from_container(container_name, file_name):
+    try:
+        blob_client = blob_service_client.get_blob_client(container=container_name, blob=file_name)
+        download_stream = blob_client.download_blob()
+        return download_stream.content_as_text()
+    except Exception as ex:
+        print(f"Exception: {ex}")
+        raise HTTPException(status_code=500, detail="Failed to download file from Azure Storage.")
 
 @app.get("/{file1}/{file2}")
 async def reat_root(file1: str, file2: str):
-    # Load the CSV files
-    print("Loading CSV files...")
-    # Ensure the file path is correct and exists
-    
-    df1 = pd.read_csv(f"BlogsData/{file1}")
-    
-    df2 = pd.read_csv(f"BlogsData/{file2}")
+    # Download the CSV files from Azure Storage
+    print("Downloading CSV files from Azure Storage...")
+    csv_content_1 = download_file_from_container("savecsv", file1)
+    csv_content_2 = download_file_from_container("savecsv", file2)
+
+    # Convert the downloaded content to DataFrames
+    df1 = pd.read_csv(pd.compat.StringIO(csv_content_1))
+    df2 = pd.read_csv(pd.compat.StringIO(csv_content_2))
     print("CSV files loaded successfully.")
-
-    # Print the first few rows to verify the contents
-    print("First few rows of df1:")
-    print(df1.head())
-
-    print("First few rows of df2:")
-    print(df2.head())
 
     # Preprocess the texts in 'Title' and 'Meta Description' columns
     print("Preprocessing text columns...")
@@ -78,27 +96,25 @@ async def reat_root(file1: str, file2: str):
     unique_df = pd.DataFrame(unique_rows)
     unique_df['Uniqueness_Score'] = uniqueness_scores
 
-    # Ensure the directory exists before saving the file
-    output_folder = "uniqueFolder"
-    os.makedirs(output_folder, exist_ok=True)
-    
     # Generate a unique file name with timestamp
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-    output_csv_path = os.path.join(output_folder, f'unique_content_{timestamp}.csv')
-    output_json_path = os.path.join(output_folder, f'unique_content_{timestamp}.json')
+    output_csv_path = f'unique_content_{timestamp}.csv'
+    output_json_path = f'unique_content_{timestamp}.json'
 
-    # Save the unique rows to a new CSV file
-    unique_df.to_csv(output_csv_path, index=False)
-    print(f"Unique content saved to '{output_csv_path}'.")
+    # Create CSV and JSON content
+    csv_content = unique_df.to_csv(index=False)
+    json_content = unique_df.to_json(orient='records', lines=True)
 
-    # Save the unique rows to a new JSON file
-    unique_df.to_json(output_json_path, orient='records', lines=True)
-    print(f"Unique content saved to '{output_json_path}'.")
+    # Upload the CSV and JSON content to Azure Storage
+    upload_file_to_container("unique", output_csv_path, csv_content)
+    upload_file_to_container("unique", output_json_path, json_content)
+
+    print(f"Unique content saved to Azure container 'unique' as '{output_csv_path}' and '{output_json_path}'.")
 
     return {
-        "Message": "Files Saved", 
-        "CSV_FileName": os.path.basename(output_csv_path),
-        "JSON_FileName": os.path.basename(output_json_path)
+        "Message": "Files Saved",
+        "CSV_FileName": output_csv_path,
+        "JSON_FileName": output_json_path
     }
 
 @app.get("/progress")

@@ -5,27 +5,41 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from datetime import datetime
 import os
-
+from azure.storage.blob import BlobServiceClient, BlobClient
+from dotenv import load_dotenv
 app = FastAPI()
-
-
+load_dotenv()
 class Progress(BaseModel):
     current_page: int
     links_extracted: int
     total_links: int
 
-
 progress = Progress(current_page=0, links_extracted=0, total_links=0)
 
+# Azure Storage connection string
+connect_str = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
+blob_service_client = BlobServiceClient.from_connection_string(connect_str)
+
+def upload_file_to_container(container_name, file_name, file_content):
+    try:
+        # Create a blob client using the provided file name as the name for the blob
+        blob_client = blob_service_client.get_blob_client(container=container_name, blob=file_name)
+
+        print(f"Uploading to Azure Storage as blob:\n\t{file_name}")
+
+        # Upload the created file
+        blob_client.upload_blob(file_content, overwrite=True)
+
+        print("Upload completed successfully.")
+    except Exception as ex:
+        print(f"Exception: {ex}")
+        raise HTTPException(status_code=500, detail="Failed to upload file to Azure Storage.")
 
 def extract_links_bayut(url):
     headers = {
-        'User-Agent':
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36'
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36'
     }
     try:
-
-        print(url, "this is the url")
         r = requests.get(url, headers=headers)
         r.raise_for_status()  # Raise an error for bad status codes
     except requests.RequestException as e:
@@ -45,14 +59,14 @@ def extract_links_bayut(url):
     # Handle the specific case for page 468
     if url == "https://www.bayut.com/mybayut/page/468/":
         next_page_url = "https://www.bayut.com/mybayut/page/469/"
+    elif url == "https://www.bayut.com/mybayut/page/472/":
+        next_page_url = "https://www.bayut.com/mybayut/page/473/"
 
     return links, next_page_url
 
-
 def extract_links_propertyfinder(url):
     headers = {
-        'User-Agent':
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36'
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36'
     }
     try:
         r = requests.get(url, headers=headers)
@@ -72,7 +86,6 @@ def extract_links_propertyfinder(url):
     next_page_url = next_page.get('href') if next_page else None
 
     return links, next_page_url
-
 
 # Main function to scrape links from all pages
 def scrape_all_pages(starting_url):
@@ -100,42 +113,34 @@ def scrape_all_pages(starting_url):
 
     # Generate a unique file name with timestamp
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-    folder_name = "LinkFiles"
-    os.makedirs(folder_name, exist_ok=True)
-    file_name = f"{folder_name}/link-{timestamp}.txt"
+    file_name = f"link-{timestamp}.txt"
+    file_content = ""
 
     while url:
         print(f"Processing page {page_count} ({url})...")
         links, next_page_url = extract_links(url)
-        new_links = set(
-            links
-        ) - all_links  # Find new links that are not already in all_links
+        new_links = set(links) - all_links  # Find new links that are not already in all_links
 
         progress.current_page = page_count
         progress.links_extracted = len(new_links)
         progress.total_links = len(all_links) + len(new_links)
 
-        # Ensure the directory exists before writing the file
-        if not os.path.exists(folder_name):
-            os.makedirs(folder_name)
-
-        # Open the file in append mode and write each unique link immediately
-        with open(file_name, 'a', encoding='utf-8') as file:
-            for link in new_links:
-                file.write(link + '\n')
+        # Append each unique link to the content that will be uploaded
+        for link in new_links:
+            file_content += link + '\n'
 
         all_links.update(new_links)  # Add new links to the set
 
-        print(
-            f"Done with {url}. Links extracted: {progress.links_extracted}. Total links: {progress.total_links}"
-        )
+        print(f"Done with {url}. Links extracted: {progress.links_extracted}. Total links: {progress.total_links}")
         if next_page_url is None:  # Check if there is no next page URL
             break  # Break out of the loop if no next page URL is found
         url = next_page_url  # Update the URL to the next page
         page_count += 1
 
-    return file_name
+    # Upload the file content to the Azure container
+    upload_file_to_container("linkfiles", file_name, file_content)
 
+    return file_name
 
 @app.get("/{encoded_url:path}")
 async def read_root(encoded_url: str):
@@ -151,16 +156,13 @@ async def read_root(encoded_url: str):
     if file_path is None:
         raise HTTPException(status_code=500, detail="Error in scraping links.")
 
-    file_name = os.path.basename(file_path)
-
     return {
         "message": "Successfully saved links.",
         "respon": {
-            "fileName": file_name,
+            "fileName": file_path,
             "site_link": base_url
         }
     }
-
 
 @app.get("/progress")
 async def get_progress():

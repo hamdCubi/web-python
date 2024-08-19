@@ -1,5 +1,5 @@
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 import csv
 import datetime
 import requests
@@ -7,8 +7,17 @@ from bs4 import BeautifulSoup
 import html
 from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
-
+from azure.storage.blob import BlobServiceClient
+from dotenv import load_dotenv
 app = FastAPI()
+load_dotenv()
+# Azure Storage connection string
+connect_str = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
+blob_service_client = BlobServiceClient.from_connection_string(connect_str)
+
+# Containers
+savelinks_container = "savelinks"
+savecsv_container = "savecsv"
 
 # Function to create a session with retries
 def create_session():
@@ -105,20 +114,40 @@ def extract_content_property_finder(url):
 
     return data
 
+# Function to download a file from Azure Blob Storage
+def download_file_from_container(container_name, blob_name):
+    blob_client = blob_service_client.get_blob_client(container=container_name, blob=blob_name)
+    try:
+        print("download start......")
+        download_stream = blob_client.download_blob()
+        print(download_stream)
+        print("download complete......")
+      
+        return download_stream.content_as_text()
+    except Exception as ex:
+        print(f"Exception: {ex}")
+        raise HTTPException(status_code=500, detail="Failed to download file from Azure Storage.")
+
+# Function to upload a file to Azure Blob Storage
+def upload_file_to_container(container_name, file_name, file_content):
+    try:
+        blob_client = blob_service_client.get_blob_client(container=container_name, blob=file_name)
+        blob_client.upload_blob(file_content, overwrite=True)
+        print(f"Uploaded {file_name} to {container_name} container.")
+    except Exception as ex:
+        print(f"Exception: {ex}")
+        raise HTTPException(status_code=500, detail="Failed to upload file to Azure Storage.")
+
 @app.get("/{file}")
 async def read_root(file: str):
-    folder_path = "BlogsData"
-    os.makedirs(folder_path, exist_ok=True)
-    base_name = os.path.splitext(os.path.basename(file))[0]
-    linkFileToRead = os.path.join("LinkFiles", file)
-
-    with open(linkFileToRead, 'r') as link_file:
-        lines = link_file.readlines()
-    formatted_links = [line.strip() for line in lines]
+    # Download the link file from Azure Storage
+    link_file_content = download_file_from_container(savelinks_container, file)
+    
+    formatted_links = link_file_content.splitlines()
 
     current_datetime = datetime.datetime.now()
     timestamp = int(current_datetime.timestamp())
-    csv_file = os.path.join(folder_path, f"{base_name}-{timestamp}.csv")
+    csv_file_name = f"{os.path.splitext(file)[0]}-{timestamp}.csv"
 
     all_data = []
 
@@ -134,10 +163,17 @@ async def read_root(file: str):
         except Exception as e:
             print(f"Error processing {url}: {e}")
 
-    with open(csv_file, mode='w', newline='', encoding='utf-8') as file:
+    # Create the CSV content
+    csv_content = ""
+    with open(csv_file_name, mode='w', newline='', encoding='utf-8') as csv_file:
         fieldnames = ["Title", "Publish Date", "Meta Description", "Canonical Link", "Article Content", "Yoast Schema Graph"]
-        writer = csv.DictWriter(file, fieldnames=fieldnames)
+        writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(all_data)
+        csv_file.seek(0)
+        csv_content = csv_file.read()
 
-    return {"Message": "Data extraction and storage complete.", "fileName": os.path.basename(csv_file)}
+    # Upload the CSV content to Azure Storage
+    upload_file_to_container(savecsv_container, csv_file_name, csv_content)
+
+    return {"Message": "Data extraction and storage complete.", "fileName": csv_file_name}

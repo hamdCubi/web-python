@@ -10,3 +10,6 @@ selenium
 webdriver-manager
 uvicorn
 gunicorn
+azure-storage-blob
+azure-identity
+dotenv
