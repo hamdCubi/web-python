@@ -12,4 +12,4 @@ uvicorn
 gunicorn
 azure-storage-blob
 azure-identity
-dotenv
+python-dotenv
