@@ -61,7 +61,7 @@ main_app.mount("/extract_blog_links", extract_blog_links)
 main_app.mount("/generate_csv", generate_csv)
 
 # Running the application with environment variables for host and port
-# if __name__ == "__main__":
-#     host = os.getenv("HOST", "0.0.0.0")
-#     port = int(os.getenv("PORT", 8000))
-#     uvicorn.run(main_app, host=host, port=port, reload=True)
+if __name__ == "__main__":
+    host = os.getenv("HOST", "0.0.0.0")
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run(main_app, host=host, port=port, reload=True)
