@@ -143,7 +143,7 @@ def scrape_all_pages(starting_url, base_url):
     upload_file_to_container("savelinks", file_name, file_content)
 
     # Send a webhook notification to the Node.js server
-    webhook_url = "https://nodejs-server-brgrfqfra5bcf5ff.eastus-01.azurewebsites.net/api/webhook/getextractLink"
+    webhook_url = "http://localhost:4000/api/webhook/getextractLink"
     payload = {
         "message": "Successfully saved links.",
         "respon": {

@@ -1,5 +1,5 @@
 import os
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 import csv
 import datetime
 import requests
@@ -10,6 +10,7 @@ from requests.packages.urllib3.util.retry import Retry
 from azure.storage.blob import BlobServiceClient
 from dotenv import load_dotenv
 import io
+from pydantic import BaseModel
 
 app = FastAPI()
 load_dotenv()
@@ -21,6 +22,13 @@ blob_service_client = BlobServiceClient.from_connection_string(connect_str)
 # Containers
 savelinks_container = "savelinks"
 savecsv_container = "savecsv"
+
+class CsvProgress(BaseModel):
+    current_link: int
+    total_links: int
+    csv_rows_written: int
+
+csv_progress = CsvProgress(current_link=0, total_links=0, csv_rows_written=0)
 
 # Function to create a session with retries
 def create_session():
@@ -51,7 +59,7 @@ def extract_content_bayut(url):
     canonical_link = soup.find('link', rel='canonical')['href'] if soup.find('link', rel='canonical') else "no link"
 
     article_content = []
-    for element in soup.select('article .entry-content p, article .entry-content h1, article .entry-content h2, article .entry-content h3, article .entry-content h4, article .entry-content h5, article .entry-content h6, article .entry-content ul, article .entry-content ol, article .entry-content li'):
+    for element in soup.select('article .entry-content p, article .entry-content h1, article .entry-content h2, article .entry-content h3, article .entry-content h4, article .entry-content h5, article .entry-content ul, article .entry-content ol, article .entry-content li'):
         article_content.append(element.get_text(strip=True))
     article_content = ' '.join(article_content) if article_content else "no content"
 
@@ -121,10 +129,10 @@ def extract_content_property_finder(url):
 def download_file_from_container(container_name, blob_name):
     blob_client = blob_service_client.get_blob_client(container=container_name, blob=blob_name)
     try:
-        print("download start......")
+        print("Download start...")
         download_stream = blob_client.download_blob()
 
-        print("download complete......")
+        print("Download complete.")
       
         return download_stream.content_as_text()
     except Exception as ex:
@@ -141,20 +149,17 @@ def upload_file_to_container(container_name, file_name, file_content):
         print(f"Exception: {ex}")
         raise HTTPException(status_code=500, detail="Failed to upload file to Azure Storage.")
 
-@app.get("/{file}")
-async def read_root(file: str):
-    # Download the link file from Azure Storage
-    link_file_content = download_file_from_container(savelinks_container, file)
-    
-    formatted_links = link_file_content.splitlines()
-
+# Function to generate CSV
+def generate_csv(formatted_links, file, base_url, refLinkId):
     current_datetime = datetime.datetime.now()
     timestamp = int(current_datetime.timestamp())
     csv_file_name = f"{os.path.splitext(file)[0]}-{timestamp}.csv"
 
     all_data = []
+    total_links = len(formatted_links)
+    csv_progress.total_links = total_links
 
-    for url in formatted_links:
+    for idx, url in enumerate(formatted_links):
         try:
             if "bayut.com" in url:
                 data = extract_content_bayut(url)
@@ -165,6 +170,11 @@ async def read_root(file: str):
             all_data.append(data)
         except Exception as e:
             print(f"Error processing {url}: {e}")
+
+        # Update progress
+        csv_progress.current_link = idx + 1
+        csv_progress.csv_rows_written = len(all_data)
+        print(f"Processed {csv_progress.current_link}/{csv_progress.total_links} links. Rows written: {csv_progress.csv_rows_written}")
 
     # Create the CSV content
     csv_file = io.StringIO()
@@ -179,4 +189,53 @@ async def read_root(file: str):
     # Upload the CSV content to Azure Storage
     upload_file_to_container(savecsv_container, csv_file_name, csv_content)
 
-    return {"Message": "Data extraction and storage complete.", "fileName": csv_file_name}
+    # Send a webhook notification to the Node.js server
+    webhook_url = "http://localhost:4000/api/webhook/saveCSVfile"
+    payload = {
+        "Message": "Data extraction and storage complete.",
+        "fileName": csv_file_name,
+        "refLinkId": refLinkId,
+        "refFileName":file
+    }
+    try:
+        response = requests.post(webhook_url, json=payload)
+        response.raise_for_status()
+        print("Webhook notification sent successfully.")
+    except requests.RequestException as e:
+        print(f"Error sending webhook notification: {e}")
+
+@app.get("/{file}")
+async def start_csv_generation(file: str, refLinkId: str, background_tasks: BackgroundTasks):
+    # Download the link file from Azure Storage
+    link_file_content = download_file_from_container(savelinks_container, file)
+    
+    formatted_links = link_file_content.splitlines()
+    base_url = ""  # Set base_url if necessary or remove if not needed
+    
+    # Start the CSV generation process in the background
+    background_tasks.add_task(generate_csv, formatted_links, file, base_url, refLinkId)
+
+    return {"status": "Task started", "message": "CSV generation process has started."}
+
+@app.get("/csv_progress")
+async def get_csv_progress():
+    return csv_progress
+
+@app.get("/{encoded_url:path}")
+async def start_scraping(encoded_url: str, background_tasks: BackgroundTasks):
+    print(encoded_url, "this is base url +++++++++++++==")
+    UpdURL = "https://"+encoded_url
+    base_url = unquote(UpdURL)
+    if not base_url:
+        raise HTTPException(status_code=404, detail="URL not found")
+
+    print(base_url, "this is base url encoded +++++++++++++==")
+    
+    # Start the scraping process in the background
+    background_tasks.add_task(scrape_all_pages, base_url, base_url)
+
+    return {"status": "Task started", "message": "Scraping process has started."}
+
+@app.get("/progress")
+async def get_progress():
+    return progress
