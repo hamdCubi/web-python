@@ -190,7 +190,7 @@ def generate_csv(formatted_links, file, base_url, refLinkId):
     upload_file_to_container(savecsv_container, csv_file_name, csv_content)
 
     # Send a webhook notification to the Node.js server
-    webhook_url = "http://localhost:4000/api/webhook/saveCSVfile"
+    webhook_url = "https://nodejs-server-brgrfqfra5bcf5ff.eastus-01.azurewebsites.net/api/webhook/saveCSVfile"
     payload = {
         "Message": "Data extraction and storage complete.",
         "fileName": csv_file_name,
