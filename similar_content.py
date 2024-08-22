@@ -11,6 +11,8 @@ from dotenv import load_dotenv
 import os
 import io
 import requests
+import gc
+import gzip
 
 load_dotenv()
 app = FastAPI()
@@ -40,24 +42,61 @@ def download_file_from_container(container_name, file_name):
     try:
         blob_client = blob_service_client.get_blob_client(container=container_name, blob=file_name)
         download_stream = blob_client.download_blob()
-        return download_stream.content_as_text()
+        return download_stream.content_as_text(encoding='utf-8')
     except Exception as ex:
         print(f"Exception: {ex}")
         raise HTTPException(status_code=500, detail="Failed to download file from Azure Storage.")
 
+# Function to cache the CSV file with Gzip compression
+def cache_csv(file_name):
+    cache_path = f'cache_{file_name}.gz'
+    
+    # Check if the file is already cached
+    if os.path.exists(cache_path):
+        print("Cache found. Using the cached file.")
+        with gzip.open(cache_path, 'rt', encoding='utf-8') as f:
+            return f.read()
+    
+    print("Cache not found or needs updating. Downloading the file...")
+    
+    # Download the file and save it as a compressed cache
+    csv_content = download_file_from_container(savecsv_container, file_name)
+    with gzip.open(cache_path, 'wt', encoding='utf-8') as f:
+        f.write(csv_content)
+    
+    return csv_content
+
+# Function to manage the cache
+def manage_cache(file_name):
+    current_cache_path = f'cache_{file_name}.gz'
+    
+    # Find any existing cache file that isn't the current one
+    existing_cache_files = [f for f in os.listdir() if f.startswith('cache_') and f != current_cache_path]
+
+    # If an old cache file exists, remove it
+    if existing_cache_files:
+        for cache_file in existing_cache_files:
+            os.remove(cache_file)
+            print(f"Removed old cache file: {cache_file}")
+
+    # Cache the new file or return the existing one
+    return cache_csv(file_name)
+
 # Function to process the data and send a webhook notification
 def process_and_notify(file1: str, input_topic: str, user_id: str):
-    webhook_url = os.getenv("WEBHOOK_URL", "https://nodejs-server-brgrfqfra5bcf5ff.eastus-01.azurewebsites.net/api/Webhook/similarContent")
+    webhook_url = os.getenv("WEBHOOK_URL", "http://localhost:4000/api/Webhook/similarContent")
     
+    df_extracted = None  # Initialize to avoid unbound variable error
+
     try:
-        # Download the CSV file from Azure Storage
-        csv_content_1 = download_file_from_container(savecsv_container, file1)
+        # Manage the cache
+        csv_content = manage_cache(file1)
         
         # Convert the downloaded content to a DataFrame using StringIO
-        df_extracted = pd.read_csv(io.StringIO(csv_content_1))
+        df_extracted = pd.read_csv(io.StringIO(csv_content))
         print("Extracted content CSV file loaded successfully.")
 
-        # Preprocess the texts in 'Title' and 'Meta Description' columns of Extracted_content
+        # Preprocess the texts in 'Title' and 'Meta Description' columns
         df_extracted['Processed_Text'] = (df_extracted['Title'].fillna('') + ' ' + df_extracted['Meta Description'].fillna('')).apply(preprocess_text)
         
         # Vectorize the texts using TF-IDF
@@ -98,6 +137,11 @@ def process_and_notify(file1: str, input_topic: str, user_id: str):
     except Exception as e:
         print(f"Failed to process data or send webhook: {e}")
         requests.post(webhook_url, json={"error": str(e), "userId": user_id})
+    finally:
+        # Clean up
+        if df_extracted is not None:
+            del df_extracted
+        gc.collect()
 
 @app.get("/{file1}/{input_topic}")
 async def read_root(file1: str, input_topic: str, user_id: str, background_tasks: BackgroundTasks):
