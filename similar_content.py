@@ -6,11 +6,11 @@ from nltk.corpus import stopwords
 import string
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 import re
-from fastapi import FastAPI
 from azure.storage.blob import BlobServiceClient
 from dotenv import load_dotenv
 import os
 import io
+import requests
 
 load_dotenv()
 app = FastAPI()
@@ -20,11 +20,9 @@ connect_str = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
 blob_service_client = BlobServiceClient.from_connection_string(connect_str)
 savecsv_container = "savecsv"
 
-# Download NLTK stopwords
-print("Downloading NLTK stopwords...")
+# Ensure NLTK stopwords are downloaded
 nltk.download('stopwords')
 stop_words = set(stopwords.words('english'))
-print("NLTK stopwords downloaded.")
 
 # Function for text preprocessing
 def preprocess_text(text):
@@ -47,65 +45,62 @@ def download_file_from_container(container_name, file_name):
         print(f"Exception: {ex}")
         raise HTTPException(status_code=500, detail="Failed to download file from Azure Storage.")
 
-@app.get("/{file1}/{input_topic}")
-async def read_root(file1: str, input_topic: str):
-    # Download the CSV file from Azure Storage
-    print("Downloading extracted content CSV file from Azure Storage...")
-    csv_content_1 = download_file_from_container(savecsv_container, file1)
+# Function to process the data and send a webhook notification
+def process_and_notify(file1: str, input_topic: str, user_id: str):
+    webhook_url = os.getenv("WEBHOOK_URL", "https://nodejs-server-brgrfqfra5bcf5ff.eastus-01.azurewebsites.net/api/Webhook/similarContent")
     
-    # Convert the downloaded content to a DataFrame using StringIO
-    df_extracted = pd.read_csv(io.StringIO(csv_content_1))
-    print("Extracted content CSV file loaded successfully.")
+    try:
+        # Download the CSV file from Azure Storage
+        csv_content_1 = download_file_from_container(savecsv_container, file1)
+        
+        # Convert the downloaded content to a DataFrame using StringIO
+        df_extracted = pd.read_csv(io.StringIO(csv_content_1))
+        print("Extracted content CSV file loaded successfully.")
 
-    # Preprocess the texts in 'Title' and 'Meta Description' columns of Extracted_content
-    print("Preprocessing text columns in Extracted_content...")
-    df_extracted['Processed_Text'] = (df_extracted['Title'].fillna('') + ' ' + df_extracted['Meta Description'].fillna('')).apply(preprocess_text)
-    print("Text columns preprocessed.")
+        # Preprocess the texts in 'Title' and 'Meta Description' columns of Extracted_content
+        df_extracted['Processed_Text'] = (df_extracted['Title'].fillna('') + ' ' + df_extracted['Meta Description'].fillna('')).apply(preprocess_text)
+        
+        # Vectorize the texts using TF-IDF
+        vectorizer = TfidfVectorizer()
+        X_extracted = vectorizer.fit_transform(df_extracted['Processed_Text'])
 
-    # Vectorize the texts using TF-IDF
-    print("Vectorizing texts using TF-IDF...")
-    vectorizer = TfidfVectorizer()
-    X_extracted = vectorizer.fit_transform(df_extracted['Processed_Text'])
-    print("Texts vectorized in Extracted_content.")
+        # Preprocess the input topic
+        processed_input_topic = preprocess_text(input_topic)
 
-    # Accept a single topic as input
-    print(f"Processing single topic: {input_topic}")
+        # Transform the processed input topic using the same vectorizer
+        X_input_topic = vectorizer.transform([processed_input_topic])
 
-    # Preprocess the input topic
-    processed_input_topic = preprocess_text(input_topic)
+        # Calculate cosine similarity between the input topic and the extracted content
+        similarity_matrix = cosine_similarity(X_input_topic, X_extracted)
 
-    # Transform the processed input topic using the same vectorizer
-    X_input_topic = vectorizer.transform([processed_input_topic])
-    print("Input topic vectorized.")
+        # Find similar content based on a similarity threshold
+        threshold = 0.5  # Adjust the threshold as needed
+        similar_pairs = []
+        used_titles = set()
 
-    # Calculate cosine similarity between the input topic and the extracted content
-    print("Calculating cosine similarity...")
-    similarity_matrix = cosine_similarity(X_input_topic, X_extracted)
-    print("Cosine similarity calculated.")
+        for j in range(similarity_matrix.shape[1]):
+            if similarity_matrix[0, j] > threshold and df_extracted.iloc[j]['Title'] not in used_titles:
+                used_titles.add(df_extracted.iloc[j]['Title'])
+                similar_row = df_extracted.iloc[j].to_dict()
+                similar_pairs.append((input_topic, similarity_matrix[0, j], df_extracted.iloc[j]['Title']) + tuple(similar_row.values()))
 
-    # Find similar content based on a similarity threshold
-    print("Finding similar content based on a similarity threshold...")
-    threshold = 0.5  # Adjust the threshold as needed
-    similar_pairs = []
-    used_titles = set()  # To keep track of used titles
+        # Save the similar pairs to a new DataFrame
+        columns = ['Topic', 'Similarity', 'Similar Title'] + list(df_extracted.columns)
+        similar_df = pd.DataFrame(similar_pairs, columns=columns)
 
-    for j in range(similarity_matrix.shape[1]):
-        if similarity_matrix[0, j] > threshold and df_extracted.iloc[j]['Title'] not in used_titles:
-            used_titles.add(df_extracted.iloc[j]['Title'])
-            similar_row = df_extracted.iloc[j].to_dict()
-            similar_pairs.append((input_topic, similarity_matrix[0, j], df_extracted.iloc[j]['Title']) + tuple(similar_row.values()))
+        # Convert the DataFrame to JSON
+        result_json = similar_df.to_json(orient='records')
 
-    # Check if there are any similar pairs found
-    if not similar_pairs:
-        return {}
+        # Send the webhook notification including userId
+        response = requests.post(webhook_url, json={"result": result_json, "userId": user_id})
+        response.raise_for_status()
+        print("Webhook notification sent successfully.")
+    except Exception as e:
+        print(f"Failed to process data or send webhook: {e}")
+        requests.post(webhook_url, json={"error": str(e), "userId": user_id})
 
-    # Save the similar pairs to a new DataFrame
-    print("Saving similar content to DataFrame...")
-    columns = ['Topic', 'Similarity', 'Similar Title'] + list(df_extracted.columns)
-    similar_df = pd.DataFrame(similar_pairs, columns=columns)
-
-    # Return single object if there's only one similar pair found
-    if len(similar_df) == 1:
-        return similar_df.iloc[0].to_json()  # Return single JSON object
-    else:
-        return similar_df.to_json(orient='records')  # Return array of JSON objects
+@app.get("/{file1}/{input_topic}")
+async def read_root(file1: str, input_topic: str, user_id: str, background_tasks: BackgroundTasks):
+    # Start the processing in the background and notify via webhook
+    background_tasks.add_task(process_and_notify, file1, input_topic, user_id)
+    return {"status": "Processing started", "message": "The results will be sent to the Node.js server when done."}

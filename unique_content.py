@@ -35,15 +35,51 @@ def preprocess_text(text):
     return ' '.join(tokens)
 
 # Function to upload a file to Azure Blob Storage
+from azure.core.exceptions import AzureError
+from azure.storage.blob import BlobClient, BlobServiceClient, ContainerClient
+from fastapi import HTTPException
+import time
+
+# Adjust these as needed
+
+# Configuration
+MAX_RETRIES = 3
+RETRY_BACKOFF_FACTOR = 2  # Exponential backoff factor
+TIMEOUT_VALUE = 500  # Timeout in seconds
+CHUNK_SIZE = 8 * 1024 * 1024  # 8MB chunks (adjust as needed)
+
 def upload_file_to_container(container_name, file_name, file_content):
     try:
+        print("comes to 1")
         blob_client = blob_service_client.get_blob_client(container=container_name, blob=file_name)
-        blob_client.upload_blob(file_content, overwrite=True)
-        print(f"Uploaded {file_name} to {container_name} container.")
+        print("comes to 2")
+        
+        # Prepare for chunked upload
+        block_list = []
+        content_length = len(file_content)
+        
+        for attempt in range(MAX_RETRIES):
+            try:
+                for i in range(0, content_length, CHUNK_SIZE):
+                    chunk = file_content[i:i + CHUNK_SIZE]
+                    block_id = str(i // CHUNK_SIZE).zfill(6)
+                    blob_client.stage_block(block_id=block_id, data=chunk)
+                    block_list.append(block_id)
+                
+                blob_client.commit_block_list(block_list)
+                print(f"Uploaded {file_name} to {container_name} container.")
+                break  # Exit the retry loop if the upload is successful
+            except AzureError as ex:
+                # Handle transient errors by retrying
+                print(f"Attempt {attempt + 1} failed with error: {ex}")
+                if attempt < MAX_RETRIES - 1:
+                    time.sleep(RETRY_BACKOFF_FACTOR ** attempt)  # Exponential backoff
+                else:
+                    print(f"Failed to upload after {MAX_RETRIES} attempts.")
+                    raise HTTPException(status_code=500, detail="Failed to upload file to Azure Storage.")
     except Exception as ex:
         print(f"Exception: {ex}")
         raise HTTPException(status_code=500, detail="Failed to upload file to Azure Storage.")
-
 # Function to download a file from Azure Blob Storage
 def download_file_from_container(container_name, file_name):
     try:
@@ -95,21 +131,31 @@ async def reat_root(file1: str, file2: str):
             unique_rows.append(df1.iloc[i])
             uniqueness_scores.append(1 - max_similarity)  # Uniqueness score (1 - max similarity)
 
+
+
     # Convert the list of unique rows to a DataFrame
+    print(f"Unique convertinf dataframe.....")
+
     unique_df = pd.DataFrame(unique_rows)
     unique_df['Uniqueness_Score'] = uniqueness_scores
 
     # Generate a unique file name with timestamp
+    print(f"genrating.....")
+
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
     output_csv_path = f'unique_content_{timestamp}.csv'
     output_json_path = f'unique_content_{timestamp}.json'
 
     # Create CSV and JSON content
+    print(f"creating csv andjson.....")
+
     csv_content = unique_df.to_csv(index=False)
     json_content = unique_df.to_json(orient='records', lines=True)
 
     # Upload the CSV and JSON content to Azure Storage
-    upload_file_to_container("unique", output_csv_path, csv_content)
+    print(f"savinf to storage....")
+
+    # upload_file_to_container("unique", output_csv_path, csv_content)
     upload_file_to_container("unique", output_json_path, json_content)
 
     print(f"Unique content saved to Azure container 'unique' as '{output_csv_path}' and '{output_json_path}'.")
