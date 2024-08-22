@@ -84,7 +84,7 @@ def manage_cache(file_name):
 
 # Function to process the data and send a webhook notification
 def process_and_notify(file1: str, input_topic: str, user_id: str):
-    webhook_url = os.getenv("WEBHOOK_URL", "http://localhost:4000/api/Webhook/similarContent")
+    webhook_url = os.getenv("WEBHOOK_URL", "https://nodejs-server-brgrfqfra5bcf5ff.eastus-01.azurewebsites.net/api/Webhook/similarContent")
     
     df_extracted = None  # Initialize to avoid unbound variable error
 
