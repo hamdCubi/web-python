@@ -35,19 +35,12 @@ def preprocess_text(text):
     tokens = [word for word in tokens if word not in stop_words]  # Remove stopwords
     return ' '.join(tokens)
 
-# Function to download a file from Azure Blob Storage in chunks
+# Function to download a file from Azure Blob Storage
 def download_file_from_container(container_name, file_name):
     try:
         blob_client = blob_service_client.get_blob_client(container=container_name, blob=file_name)
         download_stream = blob_client.download_blob()
-        
-        # Download in chunks
-        content = b""
-        chunk_size = 1024 * 1024  # 1MB chunk size
-        for chunk in download_stream.chunks(chunk_size):
-            content += chunk
-        
-        return content.decode('utf-8')
+        return download_stream.content_as_text()
     except Exception as ex:
         print(f"Exception: {ex}")
         raise HTTPException(status_code=500, detail="Failed to download file from Azure Storage.")
