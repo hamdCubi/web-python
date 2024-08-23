@@ -22,8 +22,12 @@ connect_str = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
 blob_service_client = BlobServiceClient.from_connection_string(connect_str)
 savecsv_container = "savecsv"
 
-# Ensure NLTK stopwords are downloaded
-nltk.download('stopwords')
+# Ensure NLTK stopwords are downloaded only if not already present
+try:
+    nltk.data.find('corpora/stopwords')
+except LookupError:
+    nltk.download('stopwords')
+
 stop_words = set(stopwords.words('english'))
 
 # Function for text preprocessing
@@ -47,22 +51,40 @@ def download_file_from_container(container_name, file_name):
         print(f"Exception: {ex}")
         raise HTTPException(status_code=500, detail="Failed to download file from Azure Storage.")
 
-# Function to cache the CSV file with Gzip compression
+# Function to compress a file using gzip
+def compress_content(content, file_name):
+    compressed_file_name = f'cache_{file_name}.gz'
+    
+    with gzip.open(compressed_file_name, 'wt', encoding='utf-8') as f_out:
+        f_out.write(content)
+    
+    return compressed_file_name
+
+# Function to cache the CSV file
 def cache_csv(file_name):
-    cache_path = f'cache_{file_name}.gz'
+    cache_path = f'cache_{file_name}'
     
     # Check if the file is already cached
-    if os.path.exists(cache_path):
+    if os.path.exists(cache_path + '.gz'):
         print("Cache found. Using the cached file.")
-        with gzip.open(cache_path, 'rt', encoding='utf-8') as f:
+        with gzip.open(cache_path + '.gz', 'rt', encoding='utf-8') as f:
             return f.read()
     
     print("Cache not found or needs updating. Downloading the file...")
     
-    # Download the file and save it as a compressed cache
+    # Download the file
     csv_content = download_file_from_container(savecsv_container, file_name)
-    with gzip.open(cache_path, 'wt', encoding='utf-8') as f:
-        f.write(csv_content)
+    
+    # Print original file size
+    original_size = len(csv_content.encode('utf-8'))
+    print(f"Original file size: {original_size / (1024 * 1024):.2f} MB")
+    
+    # Compress the file and save it as cache
+    compressed_file_name = compress_content(csv_content, file_name)
+    
+    # Print compressed file size
+    compressed_size = os.path.getsize(compressed_file_name)
+    print(f"Compressed file size: {compressed_size / (1024 * 1024):.2f} MB")
     
     return csv_content
 
