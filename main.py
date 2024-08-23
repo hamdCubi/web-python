@@ -22,11 +22,7 @@ connect_str = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
 blob_service_client = BlobServiceClient.from_connection_string(connect_str)
 unique_container = "unique"
 
-origins = [
-    "http://localhost:3000",
-    "https://ceab2bb2-97fe-427e-a123-a597551cdec4-00-2zbjbptvbtg7o.pike.replit.dev",
-    # Add other allowed origins as needed
-]
+origins = ["*"]
 
 main_app.add_middleware(
     CORSMiddleware,
